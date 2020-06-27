@@ -1,0 +1,154 @@
+///////////////////////////////////////////////////////////////////////////////
+// MIT License
+//
+// Copyright (c) 2020 Dmitry Klimenko
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+///////////////////////////////////////////////////////////////////////////////
+
+const RAC = "/opt/1C/v8.3/x86_64/rac"
+
+method internalAnyToJSON(json: JsonWriter, data: any)
+    if data is Array
+        json.WriteArrayStart()
+        for item in data
+            internalAnyToJSON(json, item)
+        ;
+        json.WriteArrayEnd()    
+    else if data is Map
+        json.WriteObjectStart()
+        for item in data
+            json.WritePropertyName(item.Key)
+            internalAnyToJSON(json, item.Value)
+        ;
+        json.WriteObjectEnd()    
+    else
+        json.Write(data)
+    ;
+;
+
+method objectToJSON(data: Map|Array, pretty: Boolean = False): String
+
+    use write = new StringWritableStream()
+
+    val jsonOptions = new JsonWriterOptions()
+    if not pretty
+        jsonOptions.NewLines = JsonLineBreak.None
+    ;
+    val json = new JsonWriter(write, jsonOptions)
+
+    internalAnyToJSON(json, data)
+
+    return write.ToString()
+;
+
+method execute(path: String, args: Array, workdir: String|Undefined = Undefined): String
+
+    val process = new OsProcess(path, args)
+    process.Start(workdir)
+    process.WaitForCompletion()
+
+    return process.OutputStream.ReadAsText()
+;
+
+method parseColonText(text: String): Array
+
+    val result = [{:}]
+
+    for line in text.GetLines()
+        if line.IsEmpty()
+            if result.Last().Size() > 0
+                result.Add({:})
+            ;
+            continue
+        ;
+        val pair = (line as String).Split(":")
+        var value = pair[1].Trim()
+        if value.StartsWith("\"") and value.EndsWith("\"")
+            value = value.Substring(1, value.Length()-1)
+        ;
+        result.Last().Insert(pair[0].Trim(), value)
+    ;
+
+    if result.Last().Size() == 0
+        result.RemoveAt(result.Bound())
+    ;
+
+    return result
+;
+
+method data(): String
+
+    var result = ""
+
+    val cls = parseColonText(execute(RAC, "cluster list".Split(" ")))
+    for cl in cls
+
+        val clPort = cl["port"] == "1541" ? "" : ":%{cl["port"]}"
+
+        result +=
+        "[%{cl["name"]}]
+        ID=%{cl["cluster"]}
+        Folder=/
+        External=0
+        
+        "
+        val ibs = parseColonText(execute(RAC, "infobase --cluster=%{cl["cluster"]} summary list".Split(" ")))
+        for ib in ibs
+            val ibName = "[%{cl["name"]}] %{ib["name"]} %{ib["descr"]}".TrimFromEnd()
+            result +=
+            "[%{ibName}]
+            Connect=Srvr=\"%{cl["host"]}%{clPort}\";Ref=\"%{ib["name"]}\";
+            ID=%{ib["infobase"]}
+            Folder=/%{cl["name"]}
+            External=0
+
+            "
+        ;
+    ;
+    return result
+;
+
+method body(): String
+    
+    val clientID = "00000000-0000-0000-0000-000000000000"
+    val checkCode = DateTime.Now().Format("YYYYMMddHHmmss")
+
+    return objectToJSON(
+        {
+            "root": {
+                "ClientID": clientID,
+                "InfoBasesCheckCode": checkCode,
+                "InfoBases":data()
+            }
+        }
+    )
+;
+
+method response(): String
+    return 
+    "Content-Type: application/json;charset=utf-8
+    Cache-Control: no-cache
+
+    %{body()}"
+;
+
+method Script()
+    Console.Write(response())
+;
