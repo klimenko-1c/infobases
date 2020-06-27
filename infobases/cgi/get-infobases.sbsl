@@ -25,13 +25,14 @@
 const RAC = "/opt/1C/v8.3/x86_64/rac"
 
 method internalAnyToJSON(json: JsonWriter, data: any)
-    if data is Array
+    case data
+    when is Array
         json.WriteArrayStart()
         for item in data
             internalAnyToJSON(json, item)
         ;
         json.WriteArrayEnd()    
-    else if data is Map
+    when if data is Map
         json.WriteObjectStart()
         for item in data
             json.WritePropertyName(item.Key)
@@ -103,23 +104,24 @@ method data(): String
         val clPort = cl["port"] == "1541" ? "" : ":%{cl["port"]}"
 
         result +=
-        "[%{cl["name"]}]
-        ID=%{cl["cluster"]}
-        Folder=/
-        External=0
-        
-        "
+            "[%{cl["name"]}]
+            ID=%{cl["cluster"]}
+            Folder=/
+            External=0
+            
+            "
+            
         val ibs = parseColonText(execute(RAC, "infobase --cluster=%{cl["cluster"]} summary list".Split(" ")))
         for ib in ibs
             val ibName = "[%{cl["name"]}] %{ib["name"]} %{ib["descr"]}".TrimFromEnd()
             result +=
-            "[%{ibName}]
-            Connect=Srvr=\"%{cl["host"]}%{clPort}\";Ref=\"%{ib["name"]}\";
-            ID=%{ib["infobase"]}
-            Folder=/%{cl["name"]}
-            External=0
+                "[%{ibName}]
+                Connect=Srvr=\"%{cl["host"]}%{clPort}\";Ref=\"%{ib["name"]}\";
+                ID=%{ib["infobase"]}
+                Folder=/%{cl["name"]}
+                External=0
 
-            "
+                "
         ;
     ;
     return result
